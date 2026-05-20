@@ -1,0 +1,180 @@
+# =============================================================================
+# CAN SLIM HPC Pipeline — config.yaml
+# =============================================================================
+# This file is loaded by Rank 0, validated, and broadcast to all ranks.
+# Sensitive values (API keys, DB passwords) go in .env — NOT here.
+# This file is safe to commit to version control.
+# =============================================================================
+
+pipeline:
+  # BULK        : full historical data pull + ranking (run once or periodically)
+  # DAILY_APPEND: incremental update with today's prices only
+  mode: BULK
+
+  # Unique identifier for this run (auto-generated if empty)
+  # Leave blank to auto-generate: YYYYMMDD_HHMMSS_<hostname>
+  run_id: ""
+
+  # Path root (relative to project/ directory)
+  data_dir: data
+  output_dir: outputs
+  log_dir: logs
+
+# =============================================================================
+# DATABASE
+# =============================================================================
+database:
+  # SQLite (current default) — path relative to project root
+  url: "sqlite:///data/canslim.db"
+
+  # PostgreSQL (future) — connection string from environment variable
+  # url: "${DATABASE_URL}"          ← set DATABASE_URL in .env for Postgres
+  # url: "postgresql+psycopg2://user:pass@localhost:5432/canslim"
+
+  # Maximum number of SQLAlchemy connection pool connections
+  pool_size: 5
+
+# =============================================================================
+# UNIVERSE
+# =============================================================================
+universe:
+  # Source for S&P 500 constituent list
+  # "wikipedia" = scrape Wikipedia table (free, no auth)
+  # "file"      = load from data/processed/universe/sp500.csv
+  source: wikipedia
+
+  # Path to local universe CSV (used when source = "file")
+  local_path: data/processed/universe/sp500.csv
+
+  # Path to historical membership change log (for as_of filtering)
+  history_path: data/processed/universe/universe_history.csv
+
+# =============================================================================
+# DATA COLLECTION
+# =============================================================================
+data:
+  stooq:
+    # Base URL template ({ticker} is replaced at runtime)
+    url_template: "https://stooq.com/q/d/l/?s={ticker}&i=d"
+    # Maximum age (in days) before price cache is considered stale
+    max_cache_age_days: 1
+    # Retry settings
+    max_retries: 3
+    retry_backoff_seconds: 2.0
+
+  sec_edgar:
+    # Required by SEC: identify your application
+    # Set actual value in .env as SEC_USER_AGENT
+    user_agent: "${SEC_USER_AGENT}"
+    companyfacts_url: "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
+    submissions_url: "https://data.sec.gov/submissions/CIK{cik}.json"
+    cik_map_url: "https://www.sec.gov/files/company_tickers.json"
+    # Polite crawl delay between requests (seconds)
+    crawl_delay_seconds: 0.12
+    max_cache_age_days: 7
+
+  yahoo:
+    # Only used in DAILY_APPEND mode as supplementary price source
+    enabled: false
+
+  alpaca:
+    # Only used in DAILY_APPEND mode as primary real-time source
+    enabled: false
+    # API key from .env
+    api_key: "${ALPACA_API_KEY}"
+    api_secret: "${ALPACA_API_SECRET}"
+    base_url: "https://data.alpaca.markets/v2"
+
+# =============================================================================
+# INDEX (for M factor)
+# =============================================================================
+index:
+  # Primary market index for M regime computation
+  ticker: "SPY.US"
+  # Fallback (NYSE Composite for breadth confirmation)
+  fallback_ticker: "^NYSE"
+
+# =============================================================================
+# TECHNICAL CALCULATIONS
+# =============================================================================
+technical:
+  # Moving average windows
+  ma_windows: [21, 50, 200]
+
+  # RS score windows and weights (IBD approximation)
+  rs_windows: [63, 126, 189, 252]
+  rs_weights: [2, 1, 1, 1]
+
+  # Volume average window
+  volume_avg_window: 50
+
+  # M factor: number of distribution days to trigger UNDER_PRESSURE
+  m_distribution_day_threshold: 4
+  m_lookback_days: 25
+
+  # N factor: percentage of 52-week high to consider "near high"
+  n_near_high_threshold: 0.95
+
+# =============================================================================
+# FINANCIAL CALCULATIONS
+# =============================================================================
+financial:
+  # C factor minimum quarterly EPS growth (%)
+  c_min_growth_pct: 25.0
+
+  # A factor minimum annual EPS CAGR (%)
+  a_min_cagr_pct: 25.0
+
+  # A factor: number of years for CAGR computation
+  a_cagr_years: 3
+
+  # ROE minimum threshold for quality filter (%)
+  roe_min_pct: 17.0
+
+  # Maximum filing-to-period-end lag before flagging (days)
+  max_filing_lag_days: 90
+
+# =============================================================================
+# RANKING
+# =============================================================================
+ranking:
+  # Factor weights (must sum to 1.0)
+  weights:
+    C: 0.30
+    A: 0.25
+    N: 0.15
+    S: 0.10
+    L: 0.10
+    I: 0.10
+
+  # Top-N tickers to include in the ranked output CSV
+  # 0 = include all tickers
+  top_n: 50
+
+# =============================================================================
+# QUALITY CHECKS
+# =============================================================================
+quality_checks:
+  min_price_bars: 252
+  max_price_gap_days: 10
+  price_gap_threshold_pct: 50.0
+  min_quarterly_rows: 5
+  min_annual_rows: 4
+  sec_proxy_confidence_penalty: 0.80
+
+# =============================================================================
+# LOGGING
+# =============================================================================
+logging:
+  # Level for all ranks ("DEBUG", "INFO", "WARNING", "ERROR")
+  level: INFO
+  # If true, only Rank 0 writes to stdout; workers write to file only
+  rank0_stdout_only: true
+
+# =============================================================================
+# MPI / HPC
+# =============================================================================
+mpi:
+  # Minimum number of ranks required to run the pipeline
+  # Rank 0 = orchestrator, Rank 1 = market engine, Rank 2+ = workers
+  min_ranks: 3

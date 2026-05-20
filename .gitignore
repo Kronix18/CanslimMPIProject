@@ -1,0 +1,11 @@
+.venv
+*cache
+__pycache__
+*.pyc
+data/cache*
+data/processed/*
+data/raw/*
+data/*.db
+logs/*
+outputs/*
+:memory:
