@@ -64,9 +64,11 @@ for nprocs in "${nprocs_list[@]}"; do
     fi
 done
 
+idx=0
 for time_ms in "${times_table[@]}"; do
     speedup=$(echo "scale=3; $time_ms / $baseline_time" | bc)
-    printf "| %9d | %9d | %7s |\n" $nprocs $time_ms "$speedup" >> "$OUTPUT"
+    printf "| %9d | %9d | %7s |\n" ${nprocs_list[$idx]} $time_ms "$speedup" >> "$OUTPUT"
+    ((idx++))
 done
 
 echo "" >> "$OUTPUT"
