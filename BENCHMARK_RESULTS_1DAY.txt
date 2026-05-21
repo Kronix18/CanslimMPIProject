@@ -1,0 +1,31 @@
+Benchmark Results - čet 21 maj 2026 19:34:07 CEST
+Performance Analysis: 3 runs per process count
+Workload: 503 stocks × 1 trading day (--days 1), run in reverse order (12→1)
+======================================
+
+| Processes | Avg Time (s) | Speedup | Speedup (2PCs) | Efficiency | Efficiency (2PCs) | Karp-Flatt (e) | Karp-Flatt (e - 2PCs) |
+|-----------|--------------|---------|----------------|------------|-------------------|----------------|-----------------------|
+|        12 |        33.33 |   4.554 |          6.183 |      0.380 |             0.515 |       0.148640 |              0.085518 |
+|         8 |        40.87 |   3.714 |          5.043 |      0.464 |             0.630 |       0.164846 |              0.083771 |
+|         6 |        53.45 |   2.840 |          3.856 |      0.473 |             0.643 |       0.222528 |              0.111204 |
+|         4 |        79.01 |   1.921 |          2.608 |      0.480 |             0.652 |       0.360747 |              0.177920 |
+|         2 |       206.05 |   0.737 |          1.000 |      0.368 |             0.500 |       1.713704 |              1.000000 |
+|         1 |       151.80 |   1.000 |          1.357 |      1.000 |             1.357 |       0.000000 |              0.000000 |
+
+Baseline (1 process): 151.80s
+Baseline (2 processes): 206.05s
+
+Note: The 2-process run (206.05s) was SLOWER than the 1-process baseline (151.80s).
+Karp-Flatt e=1.71 at p=2 reflects that MPI startup and orchestrator-idle overhead
+exceeded the benefit of 1 active worker. This is expected in master-worker designs
+where the orchestrator (Rank 0) does no computation. At 4+ processes the serial
+fraction stabilizes to ~0.15–0.36 reflecting SQLite reads and MPI message overhead.
+
+Metrics Explanation:
+- Speedup:    T_1 / T_p — how many times faster with p processes vs baseline
+- Efficiency: Speedup / p — fraction of ideal parallelization achieved (1.0 = perfect)
+- Karp-Flatt: e = (1/S - 1/p) / (1 - 1/p) — estimated serial code fraction
+  - e = 0.00 : perfectly parallel
+  - e = 0.10 : 10% serial, 90% parallel
+  - e > 1.00 : MPI overhead exceeds benefit (p=2 case above)
+

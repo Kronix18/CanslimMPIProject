@@ -4,6 +4,7 @@ import argparse, sys, uuid
 from pathlib import Path
 from datetime import date
 import yaml
+import pandas as pd
 from mpi4py import MPI
 import yfinance as yf
 
@@ -26,30 +27,23 @@ def load_config(config_path: Path) -> dict:
     return config
 
 
-def compute_ticker_factors(ticker, dates):
+def compute_ticker_factors(ticker, days):
     """Compute all factors for a ticker across dates."""
     factors = []
-    for dt in dates:
-        f = compute_factors_for_ticker(db, ticker, dt)
-        if f:
-            factors.append(f)
+    f = compute_factors_for_ticker(db, ticker, days)
+    if isinstance(f, pd.DataFrame) and not f.empty:
+        factors.append(f)
     return factors
 
 
-def run_bulk(config, days = 1):
+def run_bulk(config, days = 0):
     """Run bulk factor computation and ranking."""
     
     # Get dates and tickers
     if days <= 0:
-        logger.warning(f"Invalid days={days}, defaulting to 1")
-        days = 1
-    if days == 1:
-        logger.info("Running bulk pipeline for latest date only")
-        dates_df = db.exec_sql("SELECT max(date) AS date FROM price_bars", {})
-    else:
-        logger.info(f"Running bulk pipeline for last {days} days")
-        dates_df = db.exec_sql(f"SELECT DISTINCT date FROM price_bars ORDER BY date DESC LIMIT {days}", {})
-    dates = sorted(dates_df['date'].tolist())
+        logger.warning(f"Defaulting to INT LIMIT for days since non-positive value provided: {days}")
+        days = int(1e9)
+    
     
     universe = db.read_universe()
     tickers = universe["ticker"].tolist() if universe is not None else []
@@ -61,14 +55,18 @@ def run_bulk(config, days = 1):
         
         all_factors = []
         for ticker in tickers:
-            factors = compute_ticker_factors(ticker, dates)
+            factors = compute_ticker_factors(ticker, days)  # Pass raw days; function handles lookback internally
             all_factors.extend(factors)
             db.write_raw_factors(factors, str(uuid.uuid4()), mode="bulk")
-            logger.info(f"Computed {len(factors)} factors for {ticker}")
+            # Log actual number of factors (rows), not DataFrames
+            factors_count = len(factors[0]) if factors and isinstance(factors[0], pd.DataFrame) else 0
+            logger.info(f"Computed {factors_count} factors for {ticker}")
         
         rankings = finalize_rankings(None, all_factors, "Confirmed Uptrend")
         db.write_rankings(rankings, str(uuid.uuid4()), mode="bulk")
-        logger.info(f"Bulk complete: {len(all_factors)} factors, {len(rankings)} rankings")
+        # Calculate total factors from all DataFrames
+        total_factors = sum(len(f) if isinstance(f, pd.DataFrame) else 0 for f in all_factors)
+        logger.info(f"Bulk complete: {total_factors} factors, {len(rankings)} rankings")
     
     else:
         # Multi-process: orchestrator distributes work, workers compute
@@ -82,7 +80,7 @@ def run_bulk(config, days = 1):
             
             for i, ticker in enumerate(tickers):
                 worker = worker_ranks[i % len(worker_ranks)]
-                COMM.send({"ticker": ticker, "dates": dates}, dest=worker)
+                COMM.send({"ticker": ticker, "days": days}, dest=worker)
                 logger.info(f"Sent {ticker} to worker {worker}")
             
             # Send stop signal to all workers
@@ -96,9 +94,17 @@ def run_bulk(config, days = 1):
             all_factors = []
             for _ in range(len(tickers)):
                 factors = COMM.recv(source=MPI.ANY_SOURCE)
-                logger.info(f"Received factors from worker: {len(factors)} factors")
-                if factors:
-                    all_factors.extend(factors)
+                # Handle both DataFrame and dict list responses
+                if isinstance(factors, pd.DataFrame):
+                    if not factors.empty:
+                        total_factors = sum(len(f) if isinstance(f, pd.DataFrame) else 0 for f in [factors])
+                        logger.info(f"Received factors from worker: {total_factors} factors")
+                        all_factors.append(factors)
+                elif isinstance(factors, list):
+                    if factors:
+                        total_factors = sum(len(f) if isinstance(f, pd.DataFrame) else 0 for f in factors)
+                        logger.info(f"Received factors from worker: {total_factors} factors")
+                        all_factors.extend(factors)
             
             # Write raw factors
             if all_factors:
@@ -107,7 +113,9 @@ def run_bulk(config, days = 1):
             # Calculate and write rankings
             rankings = finalize_rankings(None, all_factors, "Confirmed Uptrend")
             db.write_rankings(rankings, str(uuid.uuid4()), mode="bulk")
-            logger.info(f"Orchestrator: {len(all_factors)} factors -> {len(rankings)} rankings")
+            # Calculate total factors from all DataFrames
+            total_factors = sum(len(f) if isinstance(f, pd.DataFrame) else 0 for f in all_factors)
+            logger.info(f"Orchestrator: {total_factors} factors -> {len(rankings)} rankings")
         
         else:
             # Worker: receive tickers, compute, send results (NO DB writes)
@@ -118,14 +126,17 @@ def run_bulk(config, days = 1):
                 if ticker is None:
                     break
                 
-                factors = compute_ticker_factors(ticker, msg["dates"])
+                factors = compute_ticker_factors(ticker, msg["days"])  # Function handles 252-day buffer internally
                 COMM.send(factors, dest=0)
-                logger.info(f"Worker {RANK}: {ticker} -> {len(factors)} factors")
+                # Log actual number of factors (rows), not DataFrames
+                factors_count = len(factors[0]) if factors and isinstance(factors[0], pd.DataFrame) else 0
+                logger.info(f"Worker {RANK}: {ticker} -> {factors_count} factors")
 
 def main():
     parser = argparse.ArgumentParser(description="HPC CAN SLIM Pipeline")
     parser.add_argument("--config", type=Path, default="config.yaml")
     parser.add_argument("--mode", choices=["bulk", "daily"], default="bulk")
+    parser.add_argument("--days", type=int, default=1, help="Number of recent days to process (bulk mode)")
     parser.add_argument("--tickers", nargs="+")
     args = parser.parse_args()
     
@@ -139,7 +150,7 @@ def main():
         if args.mode == "daily":
             logger.info("Running daily mode")
 
-        run_bulk(config)
+        run_bulk(config, args.days if args.mode == "bulk" else None)
         
         if RANK == 0:
             logger.info("Pipeline complete")

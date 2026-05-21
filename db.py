@@ -20,14 +20,19 @@ def read_universe():
     query = "SELECT * FROM universe ORDER BY ticker"
     return pd.read_sql(query, engine)
 
-def read_prices(ticker, start_date=None, end_date=None):
-    if start_date is None or end_date is None:
+def read_prices(ticker, days=None):
+    if days is None:
         query = f"SELECT * FROM price_bars WHERE ticker = :ticker ORDER BY date"
         return pd.read_sql(query, engine, params={"ticker": ticker})
-    query = f"SELECT * FROM price_bars WHERE ticker = :ticker AND date BETWEEN :start AND :end ORDER BY date"
-    return pd.read_sql(query, engine, params={"ticker": ticker, "start": start_date, "end": end_date})
+    query = f"SELECT * FROM price_bars WHERE ticker = :ticker AND order BY date DESC LIMIT :days"
+    return pd.read_sql(query, engine, params={"ticker": ticker, "days": days})
 
-def read_financials(ticker, is_annual=False):
+def read_financials(ticker, is_annual=False, years=None):
+    if years is not None:
+        cutoff_date = date.today().replace(year=date.today().year - int(years))
+        query = f"SELECT * FROM financials WHERE ticker = :ticker AND is_annual = :is_annual AND period_end >= :cutoff_date ORDER BY period_end"
+        return pd.read_sql(query, engine, params={"ticker": ticker, "is_annual": int(is_annual), "cutoff_date": cutoff_date})
+    
     query = f"SELECT * FROM financials WHERE ticker = :ticker AND is_annual = :is_annual ORDER BY period_end"
     return pd.read_sql(query, engine, params={"ticker": ticker, "is_annual": int(is_annual)})
 
@@ -47,13 +52,36 @@ def get_price_dates(ticker):
     return df["date"].tolist() if len(df) > 0 else []
 
 def write_raw_factors(factors_list, run_id, mode="bulk"):
-    df = pd.DataFrame(factors_list)
-    df.insert(1, "run_id", run_id)
+    # Handle both list of dicts and list of DataFrames
+    if isinstance(factors_list, list):
+        if factors_list and isinstance(factors_list[0], pd.DataFrame):
+            df = pd.concat(factors_list, ignore_index=True)
+        else:
+            df = pd.DataFrame(factors_list)
+    elif isinstance(factors_list, pd.DataFrame):
+        df = factors_list
+    else:
+        return
+    
+    if df.empty:
+        return
+    
+    df.insert(0, "run_id", run_id)
     df.to_sql("raw_factors", engine, if_exists="append", index=False)
 
 def write_rankings(rankings_list, run_id, mode="bulk"):
-    df = pd.DataFrame(rankings_list)
-    df.insert(1, "run_id", run_id)
+    # Handle both list of dicts and single list
+    if isinstance(rankings_list, list):
+        df = pd.DataFrame(rankings_list)
+    elif isinstance(rankings_list, pd.DataFrame):
+        df = rankings_list
+    else:
+        return
+    
+    if df.empty:
+        return
+    
+    df.insert(0, "run_id", run_id)
     df.to_sql("rankings", engine, if_exists="append", index=False)
 
 def exec_sql(query, params=None):

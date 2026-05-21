@@ -1,5 +1,31 @@
-Benchmark Results - sre 20 maj 2026 21:01:56 CEST
+Benchmark Results - čet 21 maj 2026 20:29:45 CEST
+Performance Analysis: 3 runs per process count
+Workload: 503 stocks × 252 trading days (--days 252), run in reverse order (12→1)
 ======================================
 
-| Processes | Time (ms) | Speedup |
-|-----------|-----------|---------|
+| Processes | Avg Time (s) | Speedup | Speedup (2PCs) | Efficiency | Efficiency (2PCs) | Karp-Flatt (e) | Karp-Flatt (e - 2PCs) |
+|-----------|--------------|---------|----------------|------------|-------------------|----------------|-----------------------|
+|        12 |        39.34 |   4.040 |          5.410 |      0.337 |             0.451 |       0.179118 |              0.110738 |
+|         8 |        46.47 |   3.420 |          4.580 |      0.427 |             0.573 |       0.191312 |              0.106675 |
+|         6 |        57.91 |   2.744 |          3.675 |      0.457 |             0.612 |       0.237317 |              0.126530 |
+|         4 |        83.36 |   1.907 |          2.553 |      0.477 |             0.638 |       0.365845 |              0.188928 |
+|         2 |       212.81 |   0.747 |          1.000 |      0.373 |             0.500 |       1.677376 |              1.000000 |
+|         1 |       158.93 |   1.000 |          1.339 |      1.000 |             1.339 |       0.000000 |              0.000000 |
+
+Baseline (1 process): 158.93s
+Baseline (2 processes): 212.81s
+
+Note: The 2-process run (212.81s) was SLOWER than the 1-process baseline (158.93s).
+Karp-Flatt e=1.67 at p=2 reflects that MPI startup and orchestrator-idle overhead
+exceeded the benefit of 1 active worker. This is expected in master-worker designs
+where the orchestrator (Rank 0) does no computation. At 4+ processes the serial
+fraction stabilizes to ~0.15–0.36 reflecting SQLite reads and MPI message overhead.
+
+Metrics Explanation:
+- Speedup:    T_1 / T_p — how many times faster with p processes vs baseline
+- Efficiency: Speedup / p — fraction of ideal parallelization achieved (1.0 = perfect)
+- Karp-Flatt: e = (1/S - 1/p) / (1 - 1/p) — estimated serial code fraction
+  - e = 0.00 : perfectly parallel
+  - e = 0.10 : 10% serial, 90% parallel
+  - e > 1.00 : MPI overhead exceeds benefit (p=2 case above)
+

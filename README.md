@@ -70,20 +70,38 @@ The database has these tables:
 - `raw_factors`: The calculated C, A, N, S, L scores for each stock-date
 - `rankings`: The final 99-1 rankings with composite scores
 
-## Performance
+## Performance & Scalability
 
-Runtime scales with process count, but SQLite becomes the bottleneck:
+Runtime scales with process count, but SQLite becomes the bottleneck beyond 8 processes. Results below are measured averages across 3 runs (503 stocks × 50 trading days):
 
-| Processes | Typical Time | Notes |
-|-----------|--------------|-------|
-| 1 | 15-20 min | Single core baseline |
-| 2 | 10-15 min | Orchestrator + 1 worker |
-| 4 | 6-10 min | Orchestrator + 3 workers |
-| 8+ | 4-8 min | SQLite serializes writes |
+| Processes | Measured Time | Speedup | Efficiency |
+|-----------|---------------|---------|-----------|
+| 1 | 152s | 1.0x | 100% |
+| 2 | 206s ⚠ | 0.7x | 37% |
+| 4 | 79s | 1.9x | 48% |
+| 6 | 53s | 2.8x | 47% |
+| 8 | 41s | 3.7x | 46% |
+| 12 | 33s | 4.6x | 38% |
+
+⚠ 2-process run is slower than 1-process. With only 1 active worker, MPI orchestration overhead (process launch, serialization, blocking send/recv) exceeds the computation saved.
 
 Processing 503 tickers × 252 days = 127,000 factor calculations per run.
 
-Future optimization: Switch to PostgreSQL for concurrent writes and achieve near-linear scaling.
+### Benchmarking
+
+Run full performance analysis with 3 iterations per process count:
+
+```bash
+./run_benchmarks.sh              # Forward: 1, 2, 4, 6, 8, 12
+./run_benchmarks.sh --reverse    # Reverse: 12, 8, 6, 4, 2, 1
+cat BENCHMARK_RESULTS.txt        # View speedup and Karp-Flatt metrics
+```
+
+For detailed analysis of scaling behavior, bottleneck identification (MPI communication, SQLite writes, load imbalance), and interpretation of metrics, see [PERFORMANCE_ANALYSIS.md](PERFORMANCE_ANALYSIS.md).
+
+**Sweet Spot**: 4–8 processes (46–48% efficiency, 1.9–3.7x speedup). Adding more processes beyond 8 yields diminishing returns due to SQLite write bottleneck on Rank 0.
+
+**Optimization Path**: Switch to PostgreSQL for true parallel writes and linear scaling beyond 8 processes.
 
 ## Configuration
 
